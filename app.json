@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "Volvo",
+    "slug": "volvo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/volvo-icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#101418",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "volvo.com"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#101418",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "volvo.com",
+      "googleServicesFile": "./google-services.json"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "backgroundColor": "#101418"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Volvo to access your photos so you can attach vehicle photos to a job.",
+          "cameraPermission": "Allow Volvo to use the camera so you can take before and after photos of a vehicle."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Volvo to use your location so we can come to your address."
+        }
+      ],
+      "@react-native-google-signin/google-signin"
+    ]
+  }
+}
