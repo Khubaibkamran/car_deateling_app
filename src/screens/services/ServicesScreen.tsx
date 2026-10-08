@@ -5,7 +5,11 @@ import { PlusFilledIcon, SearchIcon, StarSolidIcon } from '../../components/extr
 import FadeIn from '../../components/FadeIn';
 import TireBackground from '../../components/TireBackground';
 import { colors } from '../../constants/theme';
-import { SERVICE_CATEGORIES, ServiceItem, SERVICES } from '../../data/services';
+import { getServices } from '../../api/customer';
+import { serviceFromApi } from '../../api/mappers';
+import StateView from '../../components/StateView';
+import { useApi } from '../../hooks/useApi';
+import { SERVICE_CATEGORIES, ServiceItem } from '../../data/services';
 
 const NAV_HEIGHT = 100;
 
@@ -55,14 +59,16 @@ export default function ServicesScreen({ onBookService, onMenuPress, onNotificat
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<(typeof SERVICE_CATEGORIES)[number]>('All Services');
 
+  const { data, loading, error, reload } = useApi(async () => (await getServices()).map(serviceFromApi), []);
+
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return SERVICES.filter(
+    return (data ?? []).filter(
       (s) =>
         (category === 'All Services' || s.category === category) &&
         (!q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)),
     );
-  }, [query, category]);
+  }, [data, query, category]);
 
   return (
     <View style={styles.container}>
@@ -109,7 +115,11 @@ export default function ServicesScreen({ onBookService, onMenuPress, onNotificat
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {results.length === 0 ? (
+        {loading && !data ? (
+          <StateView loading />
+        ) : error && !data ? (
+          <StateView error={error} onRetry={reload} />
+        ) : results.length === 0 ? (
           <FadeIn style={styles.empty}>
             <Text style={styles.emptyTitle}>No services found</Text>
             <Text style={styles.emptyText}>Try a different search or category.</Text>

@@ -6,13 +6,19 @@ import { ChatBubbleIcon } from '../../components/jobIcons';
 import PrimaryButton from '../../components/PrimaryButton';
 import ScreenHeader from '../../components/ScreenHeader';
 import TireBackground from '../../components/TireBackground';
+import { useState } from 'react';
+import { apiMessage } from '../../api/errors';
+import { startRoute } from '../../api/technician';
 import { colors } from '../../constants/theme';
 import { JobDetail } from '../../data/jobDetails';
 
 type Props = {
   job: JobDetail;
   onBack?: () => void;
+  /** Called once the job is on the way (or already was): go to the route screen. */
   onStart?: () => void;
+  /** The technician already arrived earlier: go straight back to the service screen. */
+  onContinueService?: () => void;
   onMessageCustomer?: () => void;
 };
 
@@ -31,9 +37,35 @@ function openInMaps(job: JobDetail) {
 }
 
 // What the technician sees before heading out: the service, the car, the customer and what's included.
-export default function JobDetailsScreen({ job, onBack, onStart, onMessageCustomer }: Props) {
+export default function JobDetailsScreen({ job, onBack, onStart, onContinueService, onMessageCustomer }: Props) {
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState('');
   const [whole, cents] = job.price.toFixed(2).split('.');
   const { vehicle, customer, payment } = job;
+
+  const start = async () => {
+    if (starting) return;
+    setError('');
+    if (job.status === 'in_progress') {
+      onContinueService?.();
+      return;
+    }
+    if (job.status === 'on_the_way') {
+      onStart?.();
+      return;
+    }
+    setStarting(true);
+    try {
+      await startRoute(job.id);
+      onStart?.();
+    } catch (e) {
+      setError(apiMessage(e, 'Could not start the job. Please try again.'));
+    } finally {
+      setStarting(false);
+    }
+  };
+  const buttonTitle =
+    job.status === 'assigned' ? 'Start Job' : job.status === 'on_the_way' ? 'Continue to Customer' : job.status === 'in_progress' ? 'Continue Service' : '';
 
   return (
     <View style={styles.container}>
@@ -152,7 +184,8 @@ export default function JobDetailsScreen({ job, onBack, onStart, onMessageCustom
 
         <FadeIn delay={550} distance={30}>
           {/* The job-details design is cropped before its action button, so "Start Job" is my addition. */}
-          <PrimaryButton title="Start Job" onPress={onStart} />
+          {!!error && <Text style={styles.error}>{error}</Text>}
+          {!!buttonTitle && <PrimaryButton title={buttonTitle} onPress={start} loading={starting} />}
         </FadeIn>
       </ScrollView>
     </View>
@@ -160,6 +193,7 @@ export default function JobDetailsScreen({ job, onBack, onStart, onMessageCustom
 }
 
 const styles = StyleSheet.create({
+  error: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: colors.red, textAlign: 'center', marginBottom: 10 },
   container: { flex: 1, backgroundColor: colors.background, overflow: 'hidden' },
   scroll: { flex: 1, marginTop: 24 },
   content: { paddingHorizontal: 24, paddingBottom: 50, gap: 16 },

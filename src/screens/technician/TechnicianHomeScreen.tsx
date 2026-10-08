@@ -1,4 +1,4 @@
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 import AppHeader from '../../components/AppHeader';
@@ -8,7 +8,13 @@ import TireBackground from '../../components/TireBackground';
 import { BEZIER_XML, WAVE_XML } from '../../components/technicianIconXml';
 import ToggleSwitch from '../../components/ToggleSwitch';
 import { colors } from '../../constants/theme';
-import { Job, TECHNICIAN_NAME, TECHNICIAN_STATS, TechnicianStats, UPCOMING_JOBS } from '../../data/jobs';
+import { jobFromApi } from '../../api/mappers';
+import { getDashboard, getOpenJobs } from '../../api/technician';
+import { confirmAccept } from './confirmAccept';
+import { updateMe } from '../../api/shared';
+import StateView from '../../components/StateView';
+import { Job } from '../../data/jobs';
+import { useApi } from '../../hooks/useApi';
 import SectionHeader from '../home/SectionHeader';
 import JobCard from './JobCard';
 
@@ -29,10 +35,8 @@ function StatCard({ icon, label, children }: { icon: ReactNode; label: string; c
 const pad = (n: number) => `${n}`.padStart(2, '0');
 
 type Props = {
-  /** First name shown in the greeting. */
+  /** First name shown in the greeting until the server's arrives. */
   name?: string;
-  /** Today's numbers; defaults to the design's sample figures. */
-  stats?: TechnicianStats;
   onOpenJob?: (job: Job) => void;
   onViewAllJobs?: () => void;
   onMenuPress?: () => void;
@@ -42,9 +46,33 @@ type Props = {
 };
 
 // Technician home: availability, today's numbers and the next jobs.
-export default function TechnicianHomeScreen({ name = TECHNICIAN_NAME, stats = TECHNICIAN_STATS, onOpenJob, onViewAllJobs, onMenuPress, onNotificationsPress, notifications }: Props) {
+export default function TechnicianHomeScreen({ name = '', onOpenJob, onViewAllJobs, onMenuPress, onNotificationsPress, notifications }: Props) {
+  const { data, loading, error, reload } = useApi(getDashboard, []);
+  // Paid bookings waiting for a technician (including ones customers made for you).
+  const open = useApi(async () => (await getOpenJobs()).map((j, i) => ({ ...jobFromApi(j, i), status: 'available' as const })), []);
   const [available, setAvailable] = useState(true);
+  useEffect(() => {
+    if (data) setAvailable(data.is_available);
+  }, [data]);
+
+  const stats = {
+    earningsToday: Number(data?.earnings_today ?? 0),
+    assigned: data?.assigned ?? 0,
+    inProgress: data?.in_progress ?? 0,
+    completed: data?.completed_today ?? 0,
+  };
+  const upcoming = (data?.upcoming_jobs ?? []).map(jobFromApi);
   const [dollars, cents] = stats.earningsToday.toFixed(2).split('.');
+
+  // Flip right away, then tell the server; put it back if the server says no.
+  const changeAvailability = async (next: boolean) => {
+    setAvailable(next);
+    try {
+      await updateMe({ is_available: next });
+    } catch {
+      setAvailable(!next);
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -53,7 +81,7 @@ export default function TechnicianHomeScreen({ name = TECHNICIAN_NAME, stats = T
 
       <FadeIn delay={150} style={styles.availability}>
         <Text style={styles.availabilityText}>Available for Jobs</Text>
-        <ToggleSwitch value={available} onValueChange={setAvailable} accessibilityLabel="Available for jobs" />
+        <ToggleSwitch value={available} onValueChange={changeAvailability} accessibilityLabel="Available for jobs" />
       </FadeIn>
 
       <ScrollView
@@ -63,7 +91,7 @@ export default function TechnicianHomeScreen({ name = TECHNICIAN_NAME, stats = T
       >
         <FadeIn delay={250} style={styles.greeting}>
           <View style={styles.hello}>
-            <Text style={styles.helloText}>Hi, {name}!</Text>
+            <Text style={styles.helloText}>Hi, {data?.name || name}!</Text>
             <SvgXml xml={WAVE_XML} width={20} height={20} />
           </View>
           <Text style={styles.helloSub}>Here’s a quick look at your tasks and daily activity</Text>
@@ -98,11 +126,34 @@ export default function TechnicianHomeScreen({ name = TECHNICIAN_NAME, stats = T
         <FadeIn delay={650} style={styles.jobsSection}>
           <SectionHeader title="Upcoming Jobs" actionLabel="View All" onActionPress={onViewAllJobs} />
           <View style={styles.jobs}>
-            {UPCOMING_JOBS.map((job) => (
+            <StateView loading={loading && !data} error={data ? undefined : error} onRetry={reload} />
+            {data && upcoming.length === 0 && <Text style={styles.noJobs}>No upcoming jobs right now.</Text>}
+            {upcoming.map((job) => (
               <JobCard key={job.id} job={job} onPress={() => onOpenJob?.(job)} />
             ))}
           </View>
         </FadeIn>
+
+        {(open.data?.length ?? 0) > 0 && (
+          <FadeIn delay={750} style={styles.jobsSection}>
+            <SectionHeader title="Open Jobs" actionLabel="View All" onActionPress={onViewAllJobs} />
+            <View style={styles.jobs}>
+              {open.data!.slice(0, 5).map((job) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  onPress={() =>
+                    confirmAccept(
+                      job,
+                      (accepted) => onOpenJob?.(accepted),
+                      () => open.reload(),
+                    )
+                  }
+                />
+              ))}
+            </View>
+          </FadeIn>
+        )}
       </ScrollView>
     </View>
   );
@@ -122,6 +173,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.18)',
   },
+  noJobs: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: colors.textSecondary },
   availabilityText: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: colors.text },
   scroll: { flex: 1, marginTop: 24 },
   greeting: { marginHorizontal: 24, gap: 4 },

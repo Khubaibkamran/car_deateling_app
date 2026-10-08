@@ -7,7 +7,11 @@ import PrimaryButton from '../../components/PrimaryButton';
 import ScreenHeader from '../../components/ScreenHeader';
 import TireBackground from '../../components/TireBackground';
 import { colors } from '../../constants/theme';
-import { EXTERIOR_WASH, Plan } from '../../data/packages';
+import { getService, getServices } from '../../api/customer';
+import { PACKAGE_PHOTO, planFromApi, serviceFromApi } from '../../api/mappers';
+import StateView from '../../components/StateView';
+import { Plan } from '../../data/packages';
+import { useApi } from '../../hooks/useApi';
 
 const YELLOW = '#FFCC00';
 
@@ -40,8 +44,8 @@ function PlanCard({ plan, selected, onPress }: { plan: Plan; selected: boolean; 
           <View style={styles.priceRow}>
             <Text style={styles.price}>
               <Text style={styles.currency}>$</Text>
-              <Text style={styles.dollars}>{plan.price}</Text>
-              <Text style={styles.cents}>.00</Text>
+              <Text style={styles.dollars}>{Math.floor(plan.price)}</Text>
+              <Text style={styles.cents}>.{plan.price.toFixed(2).split('.')[1]}</Text>
             </Text>
             <View style={styles.duration}>
               <ClockOutlineIcon />
@@ -59,30 +63,48 @@ function PlanCard({ plan, selected, onPress }: { plan: Plan; selected: boolean; 
   );
 }
 
+export type ChosenPlan = { serviceId: string; serviceName: string; plan: Plan };
+
 type Props = {
+  /** Skips the service list when the customer already picked a service. */
+  serviceId?: string;
   onBack?: () => void;
-  onContinue?: (selection: { packageId: string; planId: string }) => void;
+  onContinue?: (selection: ChosenPlan) => void;
 };
 
-// Booking step 2 of 5: choose a package plan.
-export default function BookingServiceScreen({ onBack, onContinue }: Props) {
-  const pkg = EXTERIOR_WASH;
+// Booking step 2 of 5: choose a service (unless one was already picked) and one of its plans.
+export default function BookingServiceScreen({ serviceId: initialServiceId, onBack, onContinue }: Props) {
+  const [serviceId, setServiceId] = useState(initialServiceId);
   const [planId, setPlanId] = useState<string | undefined>();
   const [showError, setShowError] = useState(false);
 
+  const list = useApi(async () => (serviceId ? [] : (await getServices()).map(serviceFromApi)), [serviceId]);
+  const detail = useApi(async () => (serviceId ? await getService(serviceId) : null), [serviceId]);
+  const service = detail.data;
+  const plans = (service?.plans ?? []).map(planFromApi);
+
   const next = () => {
-    if (!planId) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !service) {
       setShowError(true);
       return;
     }
-    onContinue?.({ packageId: pkg.id, planId });
+    onContinue?.({ serviceId: String(service.id), serviceName: service.name, plan });
+  };
+
+  const back = () => {
+    // Someone who picked the service here goes back to the list first.
+    if (serviceId && !initialServiceId) {
+      setServiceId(undefined);
+      setPlanId(undefined);
+    } else onBack?.();
   };
 
   return (
     <View style={styles.container}>
       <TireBackground opacity={0.05} />
       <FadeIn delay={50} distance={-12}>
-        <ScreenHeader title="Book a Service" onBack={onBack} font="redhat" />
+        <ScreenHeader title="Book a Service" onBack={back} font="redhat" />
       </FadeIn>
 
       <FadeIn delay={150} style={styles.stepper}>
@@ -94,44 +116,82 @@ export default function BookingServiceScreen({ onBack, onContinue }: Props) {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        <FadeIn delay={250} style={styles.heading}>
-          <Text style={styles.title}>Choose Your Package</Text>
-          <Text style={styles.subtitle}>Select the level of care your vehicle needs.</Text>
-        </FadeIn>
-
-        <FadeIn delay={350} distance={28} style={styles.hero}>
-          <Image source={pkg.image} style={styles.heroImage} resizeMode="cover" />
-          <View style={styles.packageInfo}>
-            <View style={styles.nameRow}>
-              <Text style={styles.packageName}>{pkg.name}</Text>
-              <View style={styles.rating}>
-                <StarIcon />
-                <Text style={styles.ratingText}>{pkg.rating.toFixed(1)}</Text>
-              </View>
-            </View>
-            <Text style={styles.packageDescription}>{pkg.description}</Text>
-          </View>
-        </FadeIn>
-
-        <View style={styles.plans}>
-          {pkg.plans.map((plan, i) => (
-            <FadeIn key={plan.id} delay={480 + i * 110} distance={30}>
-              <PlanCard
-                plan={plan}
-                selected={planId === plan.id}
-                onPress={() => {
-                  setPlanId(plan.id);
-                  setShowError(false);
-                }}
-              />
+        {!serviceId ? (
+          <>
+            <FadeIn delay={250} style={styles.heading}>
+              <Text style={styles.title}>Choose a Service</Text>
+              <Text style={styles.subtitle}>What would you like done to your vehicle?</Text>
             </FadeIn>
-          ))}
-        </View>
+            <StateView loading={list.loading && !list.data} error={list.data ? undefined : list.error} onRetry={list.reload} />
+            {(list.data ?? []).map((svc, i) => (
+              <FadeIn key={svc.id} delay={300 + i * 70} distance={24}>
+                <Pressable style={styles.serviceRow} onPress={() => setServiceId(svc.id)}>
+                  <Image source={svc.image} style={styles.serviceThumb} resizeMode="cover" />
+                  <View style={styles.serviceText}>
+                    <Text style={styles.serviceTitle} numberOfLines={1}>
+                      {svc.name}
+                    </Text>
+                    <Text style={styles.serviceFrom}>from ${svc.from.toFixed(2)}</Text>
+                  </View>
+                  <View style={styles.rating}>
+                    <StarIcon />
+                    <Text style={styles.ratingText}>{svc.rating.toFixed(1)}</Text>
+                  </View>
+                </Pressable>
+              </FadeIn>
+            ))}
+          </>
+        ) : (
+          <>
+            <FadeIn delay={250} style={styles.heading}>
+              <Text style={styles.title}>Choose Your Package</Text>
+              <Text style={styles.subtitle}>Select the level of care your vehicle needs.</Text>
+            </FadeIn>
+            <StateView loading={detail.loading && !service} error={service ? undefined : detail.error} onRetry={detail.reload} />
 
-        <FadeIn delay={850} distance={30} style={styles.action}>
-          {showError && <Text style={styles.error}>Please choose a plan to continue.</Text>}
-          <PrimaryButton title="Continue" onPress={next} />
-        </FadeIn>
+            {service && (
+              <>
+                <FadeIn delay={350} distance={28} style={styles.hero}>
+                  <Image
+                    source={service.image ? { uri: service.image } : PACKAGE_PHOTO}
+                    style={styles.heroImage}
+                    resizeMode="cover"
+                  />
+                  <View style={styles.packageInfo}>
+                    <View style={styles.nameRow}>
+                      <Text style={styles.packageName}>{service.name}</Text>
+                      <View style={styles.rating}>
+                        <StarIcon />
+                        <Text style={styles.ratingText}>{Number(service.rating).toFixed(1)}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.packageDescription}>{service.description || service.summary}</Text>
+                  </View>
+                </FadeIn>
+
+                <View style={styles.plans}>
+                  {plans.map((plan, i) => (
+                    <FadeIn key={plan.id} delay={480 + i * 110} distance={30}>
+                      <PlanCard
+                        plan={plan}
+                        selected={planId === plan.id}
+                        onPress={() => {
+                          setPlanId(plan.id);
+                          setShowError(false);
+                        }}
+                      />
+                    </FadeIn>
+                  ))}
+                </View>
+
+                <FadeIn delay={850} distance={30} style={styles.action}>
+                  {showError && <Text style={styles.error}>Please choose a plan to continue.</Text>}
+                  <PrimaryButton title="Continue" onPress={next} />
+                </FadeIn>
+              </>
+            )}
+          </>
+        )}
       </ScrollView>
     </View>
   );
@@ -198,5 +258,19 @@ const styles = StyleSheet.create({
   },
   tagText: { fontFamily: 'Poppins_500Medium', fontSize: 10, color: colors.white },
   action: { gap: 8, marginTop: 8 },
+  serviceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: colors.background,
+  },
+  serviceThumb: { width: 64, height: 64, borderRadius: 8, backgroundColor: '#D9D9D9' },
+  serviceText: { flex: 1, gap: 2 },
+  serviceTitle: { fontFamily: 'Poppins_600SemiBold', fontSize: 14, color: colors.text },
+  serviceFrom: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: colors.textSecondary },
   error: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: colors.red, textAlign: 'center' },
 });

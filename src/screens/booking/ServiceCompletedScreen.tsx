@@ -22,17 +22,19 @@ import TireBackground from '../../components/TireBackground';
 import { colors } from '../../constants/theme';
 import { BookingSummary } from '../../types/booking';
 import { formatBookingDate } from '../../utils/calendar';
+import { reviewBooking } from '../../api/customer';
+import { apiMessage } from '../../api/errors';
+import { ApiBooking } from '../../api/types';
 
 const MAX_REVIEW = 500;
-// Sample values from the design until the backend supplies the real job record.
-const TECHNICIAN = { name: 'Alex Wilson', id: '0145425', role: 'Detailer', rating: 4.8 };
-const JOB_DURATION = '2hr 30m';
 const tire = require('../../../assets/images/splash/tire-bg.png');
 
 export type ServiceFeedback = { rating: number; review: string; signed: boolean };
 
 type Props = {
   summary: BookingSummary;
+  /** The finished booking: who did the work, how long it took and the before/after photos. */
+  booking?: ApiBooking;
   onBack?: () => void;
   onComplete?: (feedback: ServiceFeedback) => void;
   onMessage?: () => void;
@@ -47,21 +49,43 @@ function Dot({ size }: { size: number }) {
 }
 
 // Shown once the job is done: review the work, rate the technician and sign off.
-export default function ServiceCompletedScreen({ summary, onBack, onComplete, onMessage }: Props) {
+export default function ServiceCompletedScreen({ summary, booking, onBack, onComplete, onMessage }: Props) {
   const [rating, setRating] = useState(5);
   const [review, setReview] = useState('');
   const [signed, setSigned] = useState(false);
   const [drawing, setDrawing] = useState(false);
   const [showError, setShowError] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [serverError, setServerError] = useState('');
+
+  const technician = booking?.technician;
+  const beforePhoto = booking?.before_photos?.[0]?.image;
+  const afterPhoto = booking?.after_photos?.[0]?.image;
 
   const { vehicle } = summary;
 
-  const complete = () => {
+  const complete = async () => {
+    if (sending) return;
     if (!signed) {
       setShowError(true);
       return;
     }
-    onComplete?.({ rating, review: review.trim(), signed });
+    const feedback = { rating, review: review.trim(), signed };
+    // A booking that was already reviewed can't be reviewed twice; just carry on.
+    if (!summary.bookingId || booking?.review || booking?.can_review === false) {
+      onComplete?.(feedback);
+      return;
+    }
+    setSending(true);
+    setServerError('');
+    try {
+      await reviewBooking(summary.bookingId, rating, feedback.review);
+      onComplete?.(feedback);
+    } catch (error) {
+      setServerError(apiMessage(error, 'Could not send your review. Please try again.'));
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -99,7 +123,7 @@ export default function ServiceCompletedScreen({ summary, onBack, onComplete, on
                 </Text>
                 <Dot size={4} />
                 <ClockLightIcon />
-                <Text style={styles.whenText}>{JOB_DURATION}</Text>
+                <Text style={styles.whenText}>{booking?.duration ?? ''}</Text>
               </View>
             </Card>
           </FadeIn>
@@ -135,18 +159,16 @@ export default function ServiceCompletedScreen({ summary, onBack, onComplete, on
             </Card>
           </FadeIn>
 
-          <FadeIn delay={350} distance={24}>
-            <Card>
-              <Text style={styles.cardTitle}>Before & After</Text>
-              <View style={styles.compare}>
-                <BeforeAfter
-                  before={require('../../../assets/images/completed/before.jpg')}
-                  after={require('../../../assets/images/completed/after.jpg')}
-                  aspect={800 / 517}
-                />
-              </View>
-            </Card>
-          </FadeIn>
+          {beforePhoto && afterPhoto && (
+            <FadeIn delay={350} distance={24}>
+              <Card>
+                <Text style={styles.cardTitle}>Before & After</Text>
+                <View style={styles.compare}>
+                  <BeforeAfter before={{ uri: beforePhoto }} after={{ uri: afterPhoto }} aspect={800 / 517} />
+                </View>
+              </Card>
+            </FadeIn>
+          )}
 
           <FadeIn delay={450} distance={24}>
             <Card>
@@ -158,16 +180,16 @@ export default function ServiceCompletedScreen({ summary, onBack, onComplete, on
                   </View>
                   <View style={styles.techInfo}>
                     <View style={styles.techNameRow}>
-                      <Text style={styles.techName}>{TECHNICIAN.name}</Text>
+                      <Text style={styles.techName}>{technician?.full_name ?? 'Your technician'}</Text>
                       <View style={styles.ratingBadge}>
                         <StarSolidIcon />
-                        <Text style={styles.ratingBadgeText}>{TECHNICIAN.rating.toFixed(1)}</Text>
+                        <Text style={styles.ratingBadgeText}>{(technician?.rating ?? 0).toFixed(1)}</Text>
                       </View>
                     </View>
                     <View style={styles.techMeta}>
-                      <Text style={styles.metaText}>ID:{TECHNICIAN.id}</Text>
+                      <Text style={styles.metaText}>ID:{technician?.employee_code ?? ''}</Text>
                       <Dot size={2} />
-                      <Text style={styles.metaText}>{TECHNICIAN.role}</Text>
+                      <Text style={styles.metaText}>Technician</Text>
                     </View>
                   </View>
                 </View>
@@ -222,7 +244,8 @@ export default function ServiceCompletedScreen({ summary, onBack, onComplete, on
           </FadeIn>
 
           <FadeIn delay={650} distance={24}>
-            <PrimaryButton title="Complete Service" onPress={complete} />
+            {!!serverError && <Text style={styles.error}>{serverError}</Text>}
+            <PrimaryButton title="Complete Service" onPress={complete} loading={sending} />
           </FadeIn>
         </ScrollView>
       </KeyboardAvoidingView>

@@ -48,7 +48,7 @@ export default function VehicleCard({ vehicle, selected, onPress }: Props) {
               <CarTabIcon color={colors.border} />
             </View>
           )}
-          <View style={styles.info}>
+          <View style={[styles.info, !(image && imageBox) && styles.infoNoPhoto]}>
             <Text style={styles.name} numberOfLines={1}>
               {name}
             </Text>
@@ -57,7 +57,9 @@ export default function VehicleCard({ vehicle, selected, onPress }: Props) {
               <Dot />
               <Text style={styles.metaText}>{color}</Text>
               <Dot />
-              <Text style={styles.metaText}>{plate}</Text>
+              <Text style={[styles.metaText, styles.plate]} numberOfLines={1}>
+                {plate}
+              </Text>
             </View>
           </View>
         </Animated.View>
@@ -68,11 +70,14 @@ export default function VehicleCard({ vehicle, selected, onPress }: Props) {
 
 const styles = StyleSheet.create({
   card: { height: 100, borderRadius: 12, borderWidth: 1, backgroundColor: colors.background },
-  image: { position: 'absolute' },
-  placeholder: { left: 5, top: 8, width: 172, height: 84, alignItems: 'center', justifyContent: 'center' },
+  image: { position: 'absolute', borderTopLeftRadius: 11, borderBottomLeftRadius: 11 },
+  placeholder: { left: 5, top: 8, width: 96, height: 84, alignItems: 'center', justifyContent: 'center' },
   info: { position: 'absolute', left: 193, right: 12, top: 28, gap: 4 },
+  // Cars without a photo have a narrower placeholder, so the text gets the room.
+  infoNoPhoto: { left: 117 },
   name: { fontFamily: 'Poppins_500Medium', fontSize: 17, color: colors.white },
-  meta: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  plate: { flexShrink: 1 },
   metaText: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: colors.textSecondary },
   dot: { width: 2, height: 2, borderRadius: 1, backgroundColor: colors.textSecondary },
 });

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert } from '../../components/AppAlert';
 import AppHeader from '../../components/AppHeader';
 import { WalletTabIcon } from '../../components/extraIcons';
 import FadeIn from '../../components/FadeIn';
@@ -8,7 +9,12 @@ import ModalCard from '../../components/ModalCard';
 import PrimaryButton from '../../components/PrimaryButton';
 import TireBackground from '../../components/TireBackground';
 import { colors } from '../../constants/theme';
-import { BARS, JOBS_DONE, OPENING_BALANCE, Payment, PAYMENTS, Period } from '../../data/earnings';
+import { apiMessage } from '../../api/errors';
+import { stampLabel } from '../../api/mappers';
+import { getEarnings, withdraw as requestWithdraw } from '../../api/technician';
+import StateView from '../../components/StateView';
+import { Payment, Period } from '../../data/earnings';
+import { useApi } from '../../hooks/useApi';
 
 const NAV_HEIGHT = 100;
 const CHART_HEIGHT = 120;
@@ -47,23 +53,49 @@ type Props = {
 // Wallet: what you can withdraw, how the week/month went, and each payment.
 export default function EarningsScreen({ onMenuPress, onNotificationsPress, notifications }: Props) {
   const [period, setPeriod] = useState<Period>('week');
-  const [balance, setBalance] = useState(OPENING_BALANCE);
-  const [payments, setPayments] = useState<Payment[]>(PAYMENTS);
   const [confirming, setConfirming] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const { data, loading, error, reload } = useApi(() => getEarnings(period), [period]);
 
-  const bars = BARS[period];
-  const total = bars.reduce((sum, b) => sum + b.amount, 0);
-  const max = Math.max(...bars.map((b) => b.amount));
-  const jobs = JOBS_DONE[period];
+  const bars = (data?.bars ?? []).map((b) => ({ label: b.label, amount: Number(b.amount) }));
+  const total = Number(data?.total ?? 0);
+  const max = Math.max(0, ...bars.map((b) => b.amount));
+  const jobs = data?.jobs_done ?? 0;
+  const balance = Number(data?.balance ?? 0);
+  const pending = Number(data?.pending ?? 0);
 
-  // There's no payout provider yet: this only moves the balance to a "payout" entry in memory.
-  const withdraw = () => {
-    setConfirming(false);
-    setPayments((list) => [
-      { id: `payout-${Date.now()}`, title: 'Payout to Visa •••• 4242', customer: 'Bank transfer', date: 'Just now', amount: -balance },
-      ...list,
-    ]);
-    setBalance(0);
+  // Earnings first, then what was already paid out, newest first.
+  const payments: Payment[] = [
+    ...(data?.payments ?? []).map((p) => ({
+      id: `e${p.id}`,
+      title: p.title,
+      customer: p.customer,
+      date: stampLabel(p.created_at),
+      amount: Number(p.amount),
+      pending: p.pending,
+    })),
+    ...(data?.withdrawals ?? []).map((w) => ({
+      id: `w${w.id}`,
+      title: w.method_label ? `Payout to ${w.method_label}` : 'Payout',
+      customer: w.status === 'paid' ? 'Paid' : 'Requested',
+      date: stampLabel(w.requested_at),
+      amount: -Number(w.amount),
+    })),
+  ];
+
+  const withdraw = async () => {
+    if (withdrawing) return;
+    setWithdrawing(true);
+    try {
+      await requestWithdraw();
+      setConfirming(false);
+      await reload();
+    } catch (e) {
+      setConfirming(false);
+      Alert.alert('Withdraw', apiMessage(e, 'Could not request the withdrawal. Please try again.'));
+    } finally {
+      setWithdrawing(false);
+    }
   };
 
   return (
@@ -77,12 +109,15 @@ export default function EarningsScreen({ onMenuPress, onNotificationsPress, noti
           <Text style={styles.subtitle}>Track what you’ve earned and withdraw it</Text>
         </FadeIn>
 
+        <StateView loading={loading && !data} error={data ? undefined : error} onRetry={reload} />
         <FadeIn delay={250} distance={24}>
           <GlowCard tire>
             <Text style={styles.cardLabel}>Available balance</Text>
             <Text style={styles.balance}>{money(balance)}</Text>
             <View style={styles.balanceFooter}>
-              <Text style={styles.hint}>{balance > 0 ? 'Ready to withdraw' : 'Nothing to withdraw yet'}</Text>
+              <Text style={styles.hint}>
+                {balance > 0 ? 'Ready to withdraw' : pending > 0 ? `${money(pending)} becomes available in 24 hours` : 'Nothing to withdraw yet'}
+              </Text>
               <Pressable
                 onPress={() => setConfirming(true)}
                 disabled={balance <= 0}
@@ -123,11 +158,11 @@ export default function EarningsScreen({ onMenuPress, onNotificationsPress, noti
             <Text style={styles.statLabel}>Jobs done</Text>
           </View>
           <View style={styles.stat}>
-            <Text style={styles.statValue}>{money(Math.round(total / jobs))}</Text>
+            <Text style={styles.statValue}>{money(Number(data?.average_per_job ?? 0))}</Text>
             <Text style={styles.statLabel}>Avg per job</Text>
           </View>
           <View style={styles.stat}>
-            <Text style={styles.statValue}>4.8</Text>
+            <Text style={styles.statValue}>{Number(data?.rating ?? 0).toFixed(1)}</Text>
             <Text style={styles.statLabel}>Rating</Text>
           </View>
         </FadeIn>
@@ -164,13 +199,13 @@ export default function EarningsScreen({ onMenuPress, onNotificationsPress, noti
 
       <ModalCard visible={confirming} onRequestClose={() => setConfirming(false)} dismissOnBackdrop>
         <Text style={styles.modalTitle}>Withdraw {money(balance)}?</Text>
-        <Text style={styles.modalText}>We’ll send it to your Visa •••• 4242. It usually arrives within 1–2 business days.</Text>
+        <Text style={styles.modalText}>We’ll send everything that’s available to your account. It usually arrives within 1–2 business days.</Text>
         <View style={styles.modalActions}>
           <View style={styles.modalButton}>
             <PrimaryButton title="Cancel" variant="outline" onPress={() => setConfirming(false)} />
           </View>
           <View style={styles.modalButton}>
-            <PrimaryButton title="Confirm" onPress={withdraw} />
+            <PrimaryButton title="Confirm" onPress={withdraw} loading={withdrawing} />
           </View>
         </View>
       </ModalCard>

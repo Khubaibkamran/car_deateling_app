@@ -13,6 +13,8 @@ import ProfileScreen, { ProfileGroup } from './ProfileScreen';
 type Props = {
   profile: UserProfile;
   vehicleCount: number;
+  bookingCount: number;
+  reviewCount: number;
   onEditProfile: () => void;
   onOpenVehicles: () => void;
   /** Opens a page that isn't built yet, by title. */
@@ -27,6 +29,8 @@ type Props = {
 export default function CustomerProfileScreen({
   profile,
   vehicleCount,
+  bookingCount,
+  reviewCount,
   onEditProfile,
   onOpenVehicles,
   onOpenPage,
@@ -61,11 +65,10 @@ export default function CustomerProfileScreen({
     <ProfileScreen
       profile={profile}
       subtitle={profile.email || 'Customer'}
-      // Bookings and reviews are sample numbers until the backend counts them.
       stats={[
-        { value: '12', label: 'Bookings' },
+        { value: `${bookingCount}`, label: bookingCount === 1 ? 'Booking' : 'Bookings' },
         { value: `${vehicleCount}`, label: vehicleCount === 1 ? 'Vehicle' : 'Vehicles' },
-        { value: '8', label: 'Reviews' },
+        { value: `${reviewCount}`, label: reviewCount === 1 ? 'Review' : 'Reviews' },
       ]}
       groups={groups}
       onLogout={onLogout}

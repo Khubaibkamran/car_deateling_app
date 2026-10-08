@@ -40,18 +40,24 @@ function PoppingBadge({ visible }: { visible: boolean }) {
 type SignatureProps = {
   visible: boolean;
   onClose: () => void;
-  /** Called once the customer has signed and the technician confirms. */
-  onComplete: () => void;
+  /** Called once the customer has signed and the technician confirms, with the signature as SVG path data. */
+  onComplete: (signatureSvg: string) => void;
+  /** Shows a spinner on the button while the job is being completed. */
+  loading?: boolean;
+  /** Why completing failed, if it did. */
+  error?: string;
 };
 
 // The customer signs on the technician's phone to confirm the work is finished.
-export function SignatureModal({ visible, onClose, onComplete }: SignatureProps) {
+export function SignatureModal({ visible, onClose, onComplete, loading, error }: SignatureProps) {
   const [signed, setSigned] = useState(false);
+  const [svg, setSvg] = useState('');
   const [showError, setShowError] = useState(false);
 
   useEffect(() => {
     if (!visible) {
       setSigned(false);
+      setSvg('');
       setShowError(false);
     }
   }, [visible]);
@@ -61,7 +67,7 @@ export function SignatureModal({ visible, onClose, onComplete }: SignatureProps)
       setShowError(true);
       return;
     }
-    onComplete();
+    onComplete(svg);
   };
 
   return (
@@ -72,15 +78,17 @@ export function SignatureModal({ visible, onClose, onComplete }: SignatureProps)
       <View style={styles.pad}>
         <SignaturePad
           height={120}
-          onChange={(has) => {
+          onChange={(has, path) => {
             setSigned(has);
+            setSvg(path ?? '');
             if (has) setShowError(false);
           }}
         />
       </View>
       {showError && <Text style={styles.error}>The customer needs to sign before you can complete the service.</Text>}
+      {!!error && <Text style={styles.error}>{error}</Text>}
       <View style={styles.action}>
-        <PrimaryButton title="Complete Service" onPress={submit} />
+        <PrimaryButton title="Complete Service" onPress={submit} loading={loading} />
       </View>
     </ModalCard>
   );

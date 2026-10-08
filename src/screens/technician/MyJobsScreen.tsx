@@ -4,7 +4,12 @@ import AppHeader from '../../components/AppHeader';
 import FadeIn from '../../components/FadeIn';
 import TireBackground from '../../components/TireBackground';
 import { colors } from '../../constants/theme';
-import { ALL_JOBS, Job, JobStatus } from '../../data/jobs';
+import { jobFromApi } from '../../api/mappers';
+import { getJobs, getOpenJobs } from '../../api/technician';
+import { confirmAccept } from './confirmAccept';
+import StateView from '../../components/StateView';
+import { Job, JobStatus } from '../../data/jobs';
+import { useApi } from '../../hooks/useApi';
 import JobCard from './JobCard';
 
 const NAV_HEIGHT = 100;
@@ -13,6 +18,7 @@ const TABS: { key: JobStatus; label: string; empty: string }[] = [
   { key: 'upcoming', label: 'Upcoming', empty: 'No upcoming jobs right now.' },
   { key: 'inProgress', label: 'In Progress', empty: 'You have no jobs in progress.' },
   { key: 'completed', label: 'Completed', empty: 'Finished jobs will show up here.' },
+  { key: 'available', label: 'Open', empty: 'No open jobs at the moment. Check back soon.' },
 ];
 
 type Props = {
@@ -25,8 +31,28 @@ type Props = {
 // Every job, split by what stage it's at.
 export default function MyJobsScreen({ onOpenJob, onMenuPress, onNotificationsPress, notifications }: Props) {
   const [status, setStatus] = useState<JobStatus>('upcoming');
-  const jobs = ALL_JOBS[status];
   const tab = TABS.find((t) => t.key === status)!;
+  // One request for everything; the three tabs just split it up.
+  const { data, loading, error, reload } = useApi(async () => {
+    const [mine, open] = await Promise.all([getJobs(), getOpenJobs()]);
+    return [...mine.map(jobFromApi), ...open.map((j, i) => ({ ...jobFromApi(j, i), status: 'available' as const }))];
+  }, []);
+  const grouped: Record<JobStatus, Job[]> = {
+    available: (data ?? []).filter((j) => j.status === 'available'),
+    upcoming: (data ?? []).filter((j) => j.status === 'upcoming'),
+    inProgress: (data ?? []).filter((j) => j.status === 'inProgress'),
+    completed: (data ?? []).filter((j) => j.status === 'completed'),
+  };
+  const jobs = grouped[status];
+
+  // An open job isn't yours yet: ask first, then it becomes a normal upcoming job.
+  const open = (job: Job) => {
+    if (job.status !== 'available') {
+      onOpenJob?.(job);
+      return;
+    }
+    confirmAccept(job, (accepted) => onOpenJob?.(accepted), reload);
+  };
 
   return (
     <View style={styles.container}>
@@ -45,7 +71,7 @@ export default function MyJobsScreen({ onOpenJob, onMenuPress, onNotificationsPr
             <Pressable key={t.key} onPress={() => setStatus(t.key)} style={[styles.tab, active && styles.tabActive]}>
               <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
               <View style={[styles.count, active && styles.countActive]}>
-                <Text style={[styles.countText, active && styles.countTextActive]}>{ALL_JOBS[t.key].length}</Text>
+                <Text style={[styles.countText, active && styles.countTextActive]}>{grouped[t.key].length}</Text>
               </View>
             </Pressable>
           );
@@ -53,7 +79,8 @@ export default function MyJobsScreen({ onOpenJob, onMenuPress, onNotificationsPr
       </FadeIn>
 
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
-        {jobs.length === 0 ? (
+        <StateView loading={loading && !data} error={data ? undefined : error} onRetry={reload} />
+        {!data ? null : jobs.length === 0 ? (
           <FadeIn style={styles.empty}>
             <Text style={styles.emptyTitle}>Nothing here yet</Text>
             <Text style={styles.emptyText}>{tab.empty}</Text>
@@ -62,7 +89,7 @@ export default function MyJobsScreen({ onOpenJob, onMenuPress, onNotificationsPr
           // Keyed by the tab so the cards animate in again whenever you switch.
           jobs.map((job, i) => (
             <FadeIn key={`${status}-${job.id}`} delay={i * 70} distance={24}>
-              <JobCard job={job} onPress={() => onOpenJob?.(job)} />
+              <JobCard job={job} onPress={() => open(job)} />
             </FadeIn>
           ))
         )}
@@ -76,7 +103,7 @@ const styles = StyleSheet.create({
   heading: { marginTop: 32, marginHorizontal: 24, gap: 4 },
   title: { fontFamily: 'RedHatDisplay_600SemiBold', fontSize: 18, letterSpacing: 0.36, color: colors.white },
   subtitle: { fontFamily: 'Poppins_400Regular', fontSize: 14, color: colors.textSecondary },
-  tabs: { marginTop: 16, marginHorizontal: 24, flexDirection: 'row', gap: 8 },
+  tabs: { marginTop: 16, marginHorizontal: 24, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   tab: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { SvgXml } from 'react-native-svg';
 import FadeIn from '../../components/FadeIn';
@@ -12,58 +12,97 @@ import { colors } from '../../constants/theme';
 import { GRAY_MAP_STYLE } from '../../constants/mapStyle';
 import { BookingSummary } from '../../types/booking';
 import { reverseGeocode } from '../../utils/geocoding';
-import { demoRouteTo, pathLength, positionAlong } from '../../utils/route';
+import { getBooking, getTracking } from '../../api/customer';
+import { ApiBooking, ApiTracking } from '../../api/types';
+import { usePolling } from '../../hooks/useApi';
 
-// --- Simulation settings (no live tracking on the backend yet) ---
-const TICK_MS = 250;
-const SIM_SPEED = 120; // metres per second of simulated driving, so the demo finishes in ~25s
-const ETA_SPEED = 8.33; // metres per second (30 km/h) used to turn the remaining distance into minutes
-
-// Sample technician shown in the design.
-const TECHNICIAN = { name: 'Alex Wilson', id: '0145425' };
+const POLL_MS = 5000;
 
 type Props = {
   summary: BookingSummary;
+  /** The booking as the server last reported it (who the technician is, its status). */
+  booking?: ApiBooking;
   onBack?: () => void;
+  /** Opens the review screen once the service is completed. */
   onReview?: () => void;
   onCall?: () => void;
   onMessage?: () => void;
 };
 
-export default function TrackTechnicianScreen({ summary, onBack, onReview, onCall, onMessage }: Props) {
+const STATUS_COPY: Record<string, { title: string; sub: string }> = {
+  pending_payment: { title: 'Waiting for payment', sub: 'Pay for your booking to get a technician' },
+  confirmed: { title: 'Pending', sub: 'Waiting for a technician to accept your booking' },
+  assigned: { title: 'Accepted', sub: 'A technician accepted. They will set off before your appointment' },
+  in_progress: { title: 'In progress', sub: 'Your technician is at your location working on your vehicle' },
+  completed: { title: 'Service completed', sub: 'Review the work and rate your technician' },
+  cancelled: { title: 'Booking cancelled', sub: 'This booking was cancelled' },
+};
+
+export default function TrackTechnicianScreen({ summary, booking, onBack, onReview, onCall, onMessage }: Props) {
   const mapRef = useRef<MapView>(null);
   const home = useMemo(() => ({ latitude: summary.latitude, longitude: summary.longitude }), [summary]);
-  const route = useMemo(() => demoRouteTo(home), [home]);
-  const total = useMemo(() => pathLength(route), [route]);
 
-  const [traveled, setTraveled] = useState(0);
-  const [startLabel, setStartLabel] = useState('On the way');
+  const [tracking, setTracking] = useState<ApiTracking | undefined>();
+  const [current, setCurrent] = useState<ApiBooking | undefined>(booking);
+  const [startLabel, setStartLabel] = useState('Technician location');
   // Custom markers are bitmaps; let them draw once, then stop re-rendering them for performance.
   const [trackViews, setTrackViews] = useState(true);
 
-  const arrived = traveled >= total;
-  const here = useMemo(() => positionAlong(route, traveled), [route, traveled]);
-  const minutes = Math.max(1, Math.ceil((total - traveled) / ETA_SPEED / 60));
+  const id = summary.bookingId;
+  const refresh = () => {
+    if (!id) return;
+    getTracking(id).then(setTracking, () => undefined);
+    getBooking(id).then(setCurrent, () => undefined);
+  };
+  useEffect(refresh, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  usePolling(refresh, POLL_MS, !!id && current?.status !== 'completed' && current?.status !== 'cancelled');
+
+  const status = tracking?.status ?? current?.status ?? summary.status ?? 'confirmed';
+  const where = tracking?.technician_location
+    ? { latitude: Number(tracking.technician_location.latitude), longitude: Number(tracking.technician_location.longitude) }
+    : null;
+  const heading = tracking?.technician_location?.heading ?? 0;
+  const minutes = tracking?.eta_minutes ?? null;
+  const technician = current?.technician ?? current?.requested_technician ?? null;
+  const copy =
+    status === 'on_the_way'
+      ? {
+          title: 'Technician on the way',
+          sub: minutes === null ? 'On the way to you' : `Arriving within ${Math.max(1, minutes)} ${minutes <= 1 ? 'minute' : 'minutes'}`,
+        }
+      : STATUS_COPY[status] ?? STATUS_COPY.confirmed;
+  const route = where ? [where, home] : [home];
 
   useEffect(() => {
-    const id = setInterval(() => setTraveled((t) => Math.min(total, t + (SIM_SPEED * TICK_MS) / 1000)), TICK_MS);
-    return () => clearInterval(id);
-  }, [total]);
-
-  useEffect(() => {
-    const id = setTimeout(() => setTrackViews(false), 800);
-    return () => clearTimeout(id);
+    const t = setTimeout(() => setTrackViews(false), 800);
+    return () => clearTimeout(t);
   }, []);
 
+  // Keep the technician's pin and the home in view as the technician moves.
   useEffect(() => {
+    if (where) {
+      mapRef.current?.fitToCoordinates([where, home], {
+        edgePadding: { top: 150, bottom: 470, left: 60, right: 60 },
+        animated: true,
+      });
+    }
+  }, [where?.latitude, where?.longitude]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!where) return;
     let cancelled = false;
-    reverseGeocode(route[0]).then((label) => {
+    reverseGeocode(where).then((label) => {
       if (!cancelled && label) setStartLabel(label);
     });
     return () => {
       cancelled = true;
     };
-  }, [route]);
+  }, [where?.latitude, where?.longitude]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const callTechnician = () => {
+    if (onCall) onCall();
+    else if (technician?.phone) Linking.openURL(`tel:${technician.phone}`).catch(() => undefined);
+  };
 
   const fitRoute = () =>
     mapRef.current?.fitToCoordinates(route, {
@@ -87,13 +126,9 @@ export default function TrackTechnicianScreen({ summary, onBack, onReview, onCal
         onMapReady={fitRoute}
         onLayout={fitRoute}
       >
-        <Polyline
-          coordinates={here.remaining}
-          strokeColor={colors.blue}
-          strokeWidth={3}
-          lineDashPattern={[8, 6]}
-          lineCap="round"
-        />
+        {where && (
+          <Polyline coordinates={route} strokeColor={colors.blue} strokeWidth={3} lineDashPattern={[8, 6]} lineCap="round" />
+        )}
 
         <Marker coordinate={home} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={trackViews} zIndex={2}>
           <View style={styles.homeMarker}>
@@ -101,26 +136,26 @@ export default function TrackTechnicianScreen({ summary, onBack, onReview, onCal
           </View>
         </Marker>
 
-        <Marker
-          coordinate={here.coords}
-          rotation={here.heading}
-          flat
-          anchor={{ x: 0.5, y: 0.5 }}
-          tracksViewChanges={trackViews}
-          zIndex={3}
-        >
-          <Image source={require('../../../assets/images/track/car-top.png')} style={styles.car} resizeMode="contain" />
-        </Marker>
+        {where && (
+          <>
+            <Marker coordinate={where} rotation={heading} flat anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={trackViews} zIndex={3}>
+              <Image source={require('../../../assets/images/track/car-top.png')} style={styles.car} resizeMode="contain" />
+            </Marker>
 
-        <Marker
-          coordinate={here.coords}
-          anchor={{ x: 0.5, y: 0.5 }}
-          centerOffset={{ x: 0, y: -40 }}
-          tracksViewChanges={trackViews}
-          zIndex={4}
-        >
-          <Image source={require('../../../assets/images/track/tech-avatar.png')} style={styles.avatarMarker} />
-        </Marker>
+            <Marker
+              coordinate={where}
+              anchor={{ x: 0.5, y: 0.5 }}
+              centerOffset={{ x: 0, y: -40 }}
+              tracksViewChanges={trackViews}
+              zIndex={4}
+            >
+              <Image
+                source={technician?.photo ? { uri: technician.photo } : require('../../../assets/images/track/tech-avatar.png')}
+                style={styles.avatarMarker}
+              />
+            </Marker>
+          </>
+        )}
       </MapView>
 
       <LinearGradient
@@ -141,10 +176,8 @@ export default function TrackTechnicianScreen({ summary, onBack, onReview, onCal
                 <SvgXml xml={WORKER_ICON_XML} width={32} height={32} />
               </View>
               <View>
-                <Text style={styles.statusTitle}>{arrived ? 'Technician has arrived' : 'Technician on the way'}</Text>
-                <Text style={styles.statusSub}>
-                  {arrived ? 'Your technician is at your location' : `Arriving within ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`}
-                </Text>
+                <Text style={styles.statusTitle}>{copy.title}</Text>
+                <Text style={styles.statusSub}>{copy.sub}</Text>
               </View>
             </View>
           </View>
@@ -153,13 +186,17 @@ export default function TrackTechnicianScreen({ summary, onBack, onReview, onCal
         <FadeIn delay={420} distance={40}>
           <View style={[styles.card, styles.detailCard]}>
             <View>
-              <View style={styles.stop}>
-                <BlueDotIcon />
-                <Text style={styles.stopText} numberOfLines={1}>
-                  {startLabel}
-                </Text>
-              </View>
-              <View style={styles.connector} />
+              {where && (
+                <>
+                  <View style={styles.stop}>
+                    <BlueDotIcon />
+                    <Text style={styles.stopText} numberOfLines={1}>
+                      {startLabel}
+                    </Text>
+                  </View>
+                  <View style={styles.connector} />
+                </>
+              )}
               <View style={styles.stop}>
                 <RoutePinIcon />
                 <Text style={styles.stopText} numberOfLines={1}>
@@ -178,15 +215,18 @@ export default function TrackTechnicianScreen({ summary, onBack, onReview, onCal
             <View style={styles.techRow}>
               <View style={styles.techLeft}>
                 <View style={styles.techPhoto}>
-                  <Image source={require('../../../assets/images/track/alex.jpg')} style={styles.techImage} />
+                  <Image
+                    source={technician?.photo ? { uri: technician.photo } : require('../../../assets/images/track/alex.jpg')}
+                    style={styles.techImage}
+                  />
                 </View>
                 <View>
-                  <Text style={styles.techName}>{TECHNICIAN.name}</Text>
-                  <Text style={styles.techId}>ID:{TECHNICIAN.id}</Text>
+                  <Text style={styles.techName}>{technician?.full_name ?? 'Technician pending'}</Text>
+                  {!!technician?.employee_code && <Text style={styles.techId}>ID:{technician.employee_code}</Text>}
                 </View>
               </View>
               <View style={styles.actions}>
-                <Pressable style={styles.callButton} onPress={onCall} accessibilityLabel="Call technician">
+                <Pressable style={styles.callButton} onPress={callTechnician} accessibilityLabel="Call technician">
                   <PhoneIcon />
                 </Pressable>
                 <Pressable style={styles.chatButton} onPress={onMessage} accessibilityLabel="Message technician">
@@ -198,7 +238,11 @@ export default function TrackTechnicianScreen({ summary, onBack, onReview, onCal
         </FadeIn>
 
         <FadeIn delay={540} distance={40}>
-          <PrimaryButton title="Review & Confirm" onPress={onReview} />
+          {status === 'completed' ? (
+            <PrimaryButton title="Review & Confirm" onPress={onReview} />
+          ) : (
+            <PrimaryButton title="Back to Home" variant="outline" onPress={onBack} />
+          )}
         </FadeIn>
       </View>
     </View>

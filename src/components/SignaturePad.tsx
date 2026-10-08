@@ -5,8 +5,8 @@ import { colors } from '../constants/theme';
 import { RefreshIcon } from './extraIcons';
 
 type Props = {
-  /** Reports whether anything has been drawn. */
-  onChange?: (hasSignature: boolean) => void;
+  /** Reports whether anything has been drawn, with the drawing as SVG path data once a stroke ends. */
+  onChange?: (hasSignature: boolean, svgPath?: string) => void;
   /** Called when a stroke starts/ends so a parent scroll view can pause while drawing. */
   onDrawingChange?: (drawing: boolean) => void;
   height?: number;
@@ -34,6 +34,7 @@ function toPath(points: Point[]): string {
 export default function SignaturePad({ onChange, onDrawingChange, height = 88 }: Props) {
   const [strokes, setStrokes] = useState<Point[][]>([]);
   const live = useRef<Point[]>([]);
+  const all = useRef<Point[][]>([]);
   const notify = useRef({ onChange, onDrawingChange });
   notify.current = { onChange, onDrawingChange };
 
@@ -46,16 +47,17 @@ export default function SignaturePad({ onChange, onDrawingChange, height = 88 }:
         onPanResponderGrant: (e) => {
           live.current = [{ x: e.nativeEvent.locationX, y: e.nativeEvent.locationY }];
           notify.current.onDrawingChange?.(true);
-          setStrokes((s) => [...s, live.current]);
+          all.current = [...all.current, live.current];
+          setStrokes(all.current);
         },
         onPanResponderMove: (e) => {
           live.current = [...live.current, { x: e.nativeEvent.locationX, y: e.nativeEvent.locationY }];
-          const stroke = live.current;
-          setStrokes((s) => [...s.slice(0, -1), stroke]);
+          all.current = [...all.current.slice(0, -1), live.current];
+          setStrokes(all.current);
         },
         onPanResponderRelease: () => {
           notify.current.onDrawingChange?.(false);
-          notify.current.onChange?.(true);
+          notify.current.onChange?.(true, all.current.map(toPath).join(' '));
         },
         onPanResponderTerminate: () => notify.current.onDrawingChange?.(false),
       }),
@@ -64,6 +66,7 @@ export default function SignaturePad({ onChange, onDrawingChange, height = 88 }:
 
   const clear = () => {
     setStrokes([]);
+    all.current = [];
     live.current = [];
     onChange?.(false);
   };

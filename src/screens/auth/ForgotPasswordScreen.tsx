@@ -9,16 +9,17 @@ import OtpInput from '../../components/OtpInput';
 import PrimaryButton from '../../components/PrimaryButton';
 import ScreenHeader from '../../components/ScreenHeader';
 import TireBackground from '../../components/TireBackground';
+import { forgotPassword, resetPassword, verifyResetCode } from '../../api/auth';
+import { apiMessage } from '../../api/errors';
 import { colors } from '../../constants/theme';
 
 type Step = 'email' | 'code' | 'reset';
 const STEPS: Step[] = ['email', 'code', 'reset'];
-type Role = 'customer' | 'technician';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CODE_LENGTH = 6;
 const RESEND_SECONDS = 30;
-const MIN_PASSWORD = 8;
+const MIN_PASSWORD = 6;
 
 /** "john.smith@mail.com" -> "j***@mail.com" */
 function maskEmail(email: string): string {
@@ -26,11 +27,11 @@ function maskEmail(email: string): string {
   return `${local.charAt(0)}***@${domain}`;
 }
 
-const COPY: Record<Step, { title: string; subtitle: (email: string, role: Role) => string; button: string }> = {
+const COPY: Record<Step, { title: string; subtitle: (email: string) => string; button: string }> = {
   email: {
     title: 'Forgot your password?',
-    subtitle: (_email, role) =>
-      `Enter the email linked to your ${role === 'technician' ? 'technician ' : ''}account and we’ll send you a code to reset it.`,
+    subtitle: () =>
+      'Enter the email linked to your account and we’ll send you a code to reset it.',
     button: 'Send Reset Code',
   },
   code: {
@@ -46,16 +47,14 @@ const COPY: Record<Step, { title: string; subtitle: (email: string, role: Role) 
 };
 
 type Props = {
-  role: Role;
   /** Leaves the flow from its first step. */
   onBack?: () => void;
   /** Called after the password is reset and the success message is closed. */
   onDone?: () => void;
 };
 
-// Reset a forgotten password in three steps. There's no account server yet, so no email is sent and
-// any 6-digit code is accepted; the screens and the rules (valid email, 6 digits, 8+ char password) are final.
-export default function ForgotPasswordScreen({ role, onBack, onDone }: Props) {
+// Reset a forgotten password in three steps: email a code, check the code, then set a new password.
+export default function ForgotPasswordScreen({ onBack, onDone }: Props) {
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
@@ -66,6 +65,8 @@ export default function ForgotPasswordScreen({ role, onBack, onDone }: Props) {
   const [done, setDone] = useState(false);
   const [seconds, setSeconds] = useState(RESEND_SECONDS);
   const [resent, setResent] = useState(false);
+  const [resetToken, setResetToken] = useState('');
+  const [serverError, setServerError] = useState('');
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const index = STEPS.indexOf(step);
@@ -86,39 +87,40 @@ export default function ForgotPasswordScreen({ role, onBack, onDone }: Props) {
 
   const emailOk = EMAIL.test(email.trim());
   const hasLength = password.length >= MIN_PASSWORD;
-  const hasNumber = /\d/.test(password);
-  const mixedCase = /[a-z]/.test(password) && /[A-Z]/.test(password);
-  const passwordOk = hasLength && hasNumber;
+  const passwordOk = hasLength;
   const matches = password === confirm;
-
-  const wait = (then: () => void) => {
-    setLoading(true);
-    timer.current = setTimeout(() => {
-      setLoading(false);
-      then();
-    }, 900);
-  };
 
   const goTo = (next: Step) => {
     setSubmitted(false);
+    setServerError('');
     setStep(next);
   };
 
-  const submit = () => {
+  const submit = async () => {
+    if (loading) return;
     setSubmitted(true);
-    if (step === 'email') {
-      if (!emailOk) return;
-      wait(() => {
+    setServerError('');
+    if (step === 'email' && !emailOk) return;
+    if (step === 'code' && code.length < CODE_LENGTH) return;
+    if (step === 'reset' && (!passwordOk || !matches)) return;
+    setLoading(true);
+    try {
+      if (step === 'email') {
+        await forgotPassword(email);
         setSeconds(RESEND_SECONDS);
         setCode('');
         goTo('code');
-      });
-    } else if (step === 'code') {
-      if (code.length < CODE_LENGTH) return;
-      wait(() => goTo('reset'));
-    } else {
-      if (!passwordOk || !matches) return;
-      wait(() => setDone(true));
+      } else if (step === 'code') {
+        setResetToken(await verifyResetCode(email, code));
+        goTo('reset');
+      } else {
+        await resetPassword(resetToken, password);
+        setDone(true);
+      }
+    } catch (error) {
+      setServerError(apiMessage(error));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -127,11 +129,18 @@ export default function ForgotPasswordScreen({ role, onBack, onDone }: Props) {
     else goTo(STEPS[index - 1]);
   };
 
-  const resend = () => {
-    setSeconds(RESEND_SECONDS);
-    setCode('');
-    setResent(true);
-    timer.current = setTimeout(() => setResent(false), 2500);
+  const resend = async () => {
+    setServerError('');
+    try {
+      await forgotPassword(email);
+      setSeconds(RESEND_SECONDS);
+      setCode('');
+      setResent(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setResent(false), 2500);
+    } catch (error) {
+      setServerError(apiMessage(error));
+    }
   };
 
   const copy = COPY[step];
@@ -166,7 +175,7 @@ export default function ForgotPasswordScreen({ role, onBack, onDone }: Props) {
               {step === 'reset' && <LockIcon size={34} />}
             </View>
             <Text style={styles.title}>{copy.title}</Text>
-            <Text style={styles.subtitle}>{copy.subtitle(email.trim(), role)}</Text>
+            <Text style={styles.subtitle}>{copy.subtitle(email.trim())}</Text>
 
             <View style={styles.body}>
               {step === 'email' && (
@@ -226,8 +235,6 @@ export default function ForgotPasswordScreen({ role, onBack, onDone }: Props) {
                     />
                     <View style={styles.rules}>
                       <Rule ok={hasLength} text={`At least ${MIN_PASSWORD} characters`} />
-                      <Rule ok={hasNumber} text="Contains a number" />
-                      <Rule ok={mixedCase} text="Upper and lower case letters (recommended)" />
                     </View>
                   </View>
                   <View>
@@ -246,6 +253,7 @@ export default function ForgotPasswordScreen({ role, onBack, onDone }: Props) {
                   </View>
                 </View>
               )}
+              {serverError ? <Text style={styles.serverError}>{serverError}</Text> : null}
             </View>
           </FadeIn>
         </ScrollView>
@@ -300,6 +308,7 @@ const styles = StyleSheet.create({
   subtitle: { fontFamily: 'Poppins_400Regular', fontSize: 14, lineHeight: 21, color: colors.textSecondary, marginTop: 8 },
   body: { marginTop: 28 },
   fields: { gap: 18 },
+  serverError: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: colors.red, textAlign: 'center', marginTop: 12 },
   error: { fontFamily: 'Poppins_500Medium', fontSize: 11, color: colors.red, marginTop: 6, marginLeft: 4 },
   codeBlock: { gap: 20 },
   codeError: { fontFamily: 'Poppins_500Medium', fontSize: 11, color: colors.red, textAlign: 'center', marginTop: -8 },

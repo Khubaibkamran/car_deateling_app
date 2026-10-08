@@ -1,4 +1,5 @@
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert } from '../../components/AppAlert';
 import AppHeader from '../../components/AppHeader';
 import { TrashIcon } from '../../components/drawerIcons';
 import FadeIn from '../../components/FadeIn';

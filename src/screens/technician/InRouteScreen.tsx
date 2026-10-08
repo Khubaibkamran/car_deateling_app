@@ -1,4 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Location from 'expo-location';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
@@ -10,34 +11,63 @@ import ScreenHeader from '../../components/ScreenHeader';
 import { GRAY_MAP_STYLE } from '../../constants/mapStyle';
 import { colors } from '../../constants/theme';
 import { JobDetail } from '../../data/jobDetails';
-import { demoRouteTo, pathLength, positionAlong } from '../../utils/route';
+import { apiMessage } from '../../api/errors';
+import { markArrived, sendLocation } from '../../api/technician';
+import { Coords } from '../../utils/geocoding';
 
-// Simulated drive (no live technician position on the backend yet).
-const TICK_MS = 250;
-const SIM_SPEED = 80; // metres per second of simulated driving
+// How often the phone reports where the technician is.
+const LOCATION_MS = 4000;
 
 type Props = {
   job: JobDetail;
   onBack?: () => void;
+  /** Called once the server has recorded that the technician arrived. */
   onArrived?: () => void;
   onMessageCustomer?: () => void;
 };
 
-// "On the way": the technician drives to the customer. Pressing "I've Arrived" starts the job.
+// "On the way": the technician drives to the customer while the phone reports its position so the
+// customer can follow. Pressing "I've Arrived" starts the job.
 export default function InRouteScreen({ job, onBack, onArrived, onMessageCustomer }: Props) {
   const mapRef = useRef<MapView>(null);
   const destination = useMemo(() => ({ latitude: job.latitude, longitude: job.longitude }), [job]);
-  const route = useMemo(() => demoRouteTo(destination), [destination]);
-  const total = useMemo(() => pathLength(route), [route]);
 
-  const [traveled, setTraveled] = useState(0);
+  const [here, setHere] = useState<{ coords: Coords; heading: number } | null>(null);
   const [trackViews, setTrackViews] = useState(true);
-  const here = useMemo(() => positionAlong(route, traveled), [route, traveled]);
+  const [arriving, setArriving] = useState(false);
+  const [error, setError] = useState('');
+  const route = useMemo(() => (here ? [here.coords, destination] : [destination]), [here, destination]);
 
   useEffect(() => {
-    const id = setInterval(() => setTraveled((t) => Math.min(total, t + (SIM_SPEED * TICK_MS) / 1000)), TICK_MS);
-    return () => clearInterval(id);
-  }, [total]);
+    let cancelled = false;
+    let watcher: Location.LocationSubscription | undefined;
+    (async () => {
+      try {
+        const { granted } = await Location.requestForegroundPermissionsAsync();
+        if (!granted || cancelled) {
+          if (!granted) setError('Allow location access so the customer can follow you.');
+          return;
+        }
+        watcher = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.Balanced, timeInterval: LOCATION_MS, distanceInterval: 10 },
+          (loc) => {
+            const heading = loc.coords.heading != null && loc.coords.heading >= 0 ? loc.coords.heading : 0;
+            const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+            setHere({ coords, heading });
+            // A missed update isn't worth interrupting the technician: the next one follows shortly.
+            sendLocation(coords.latitude, coords.longitude, heading).catch(() => undefined);
+          },
+        );
+        if (cancelled) watcher.remove();
+      } catch {
+        setError('Could not read your location.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+      watcher?.remove();
+    };
+  }, []);
 
   // Custom markers are bitmaps: let them draw once, then stop re-rendering them for performance.
   useEffect(() => {
@@ -50,6 +80,26 @@ export default function InRouteScreen({ job, onBack, onArrived, onMessageCustome
       edgePadding: { top: 150, bottom: 400, left: 60, right: 60 },
       animated: false,
     });
+
+  // Re-frame the map the first time a position arrives.
+  const hasFix = !!here;
+  useEffect(() => {
+    if (hasFix) fitRoute();
+  }, [hasFix]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const arrived = async () => {
+    if (arriving) return;
+    setArriving(true);
+    setError('');
+    try {
+      await markArrived(job.id);
+      onArrived?.();
+    } catch (e) {
+      setError(apiMessage(e, 'Could not update the job. Please try again.'));
+    } finally {
+      setArriving(false);
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -67,7 +117,7 @@ export default function InRouteScreen({ job, onBack, onArrived, onMessageCustome
         onMapReady={fitRoute}
         onLayout={fitRoute}
       >
-        <Polyline coordinates={here.remaining} strokeColor={colors.blue} strokeWidth={3} lineDashPattern={[8, 6]} lineCap="round" />
+        {here && <Polyline coordinates={route} strokeColor={colors.blue} strokeWidth={3} lineDashPattern={[8, 6]} lineCap="round" />}
 
         <Marker coordinate={destination} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={trackViews} zIndex={2}>
           <View style={styles.homeMarker}>
@@ -84,16 +134,18 @@ export default function InRouteScreen({ job, onBack, onArrived, onMessageCustome
           <Image source={job.customer.photo} style={styles.customerMarker} />
         </Marker>
 
-        <Marker
-          coordinate={here.coords}
-          rotation={here.heading}
-          flat
-          anchor={{ x: 0.5, y: 0.5 }}
-          tracksViewChanges={trackViews}
-          zIndex={3}
-        >
-          <Image source={require('../../../assets/images/track/car-top.png')} style={styles.car} resizeMode="contain" />
-        </Marker>
+        {here && (
+          <Marker
+            coordinate={here.coords}
+            rotation={here.heading}
+            flat
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={trackViews}
+            zIndex={3}
+          >
+            <Image source={require('../../../assets/images/track/car-top.png')} style={styles.car} resizeMode="contain" />
+          </Marker>
+        )}
       </MapView>
 
       <LinearGradient pointerEvents="none" colors={['rgba(17,24,39,0.8)', 'rgba(17,24,39,0)']} style={styles.topFade} />
@@ -138,7 +190,8 @@ export default function InRouteScreen({ job, onBack, onArrived, onMessageCustome
         </FadeIn>
 
         <FadeIn delay={450} distance={40}>
-          <PrimaryButton title="I’ve Arrived" onPress={onArrived} />
+          {!!error && <Text style={styles.error}>{error}</Text>}
+          <PrimaryButton title="I’ve Arrived" onPress={arrived} loading={arriving} />
         </FadeIn>
       </View>
     </View>
@@ -180,4 +233,5 @@ const styles = StyleSheet.create({
   },
   customerMarker: { width: 38, height: 38, borderRadius: 19, borderWidth: 2, borderColor: colors.white },
   car: { width: 22, height: 42 },
+  error: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: colors.red, textAlign: 'center', marginBottom: 10 },
 });

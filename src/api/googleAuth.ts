@@ -1,8 +1,8 @@
 import { TurboModuleRegistry } from 'react-native';
 import { api } from './client';
+import { AuthResponse } from './types';
 
-export type GoogleUser = { id: number; email: string; full_name: string; role: 'customer' | 'technician' };
-export type GoogleSession = { access: string; refresh: string; user: GoogleUser; created: boolean };
+export type GoogleSession = AuthResponse & { created: boolean };
 
 // The Web client ID from Firebase console > Authentication > Sign-in method > Google
 // (or Google Cloud console > Credentials > "Web client (auto created by Google Service)").
@@ -16,7 +16,7 @@ export class GoogleSignInError extends Error {}
  * Resolves to null if the person closed the picker. Needs a development/production build:
  * the native module is not part of Expo Go.
  */
-export async function signInWithGoogle(role: 'customer' | 'technician'): Promise<GoogleSession | null> {
+export async function signInWithGoogle(role?: 'customer' | 'technician'): Promise<GoogleSession | null> {
   // Expo Go doesn't contain the native module; requiring the package there crashes, so look first.
   if (!TurboModuleRegistry.get('RNGoogleSignin')) {
     throw new GoogleSignInError('Google sign-in needs the Volvo development build; it does not run in Expo Go.');

@@ -49,11 +49,11 @@ export default function TechnicianProfileScreen({ profile, onEditProfile, onOpen
   return (
     <ProfileScreen
       profile={profile}
-      subtitle={`Technician · ${profile.specialty || 'ID 0145425'}`}
+      subtitle={`Technician · ${profile.specialty || (profile.employeeCode ? `ID ${profile.employeeCode}` : 'Volvo Detailing')}`}
       stats={[
-        { value: '4.8', label: 'Rating' },
-        { value: '126', label: 'Jobs done' },
-        { value: '98%', label: 'On time' },
+        { value: profile.ratingCount ? (profile.rating ?? 0).toFixed(1) : '–', label: 'Rating' },
+        { value: `${profile.jobsCompleted ?? 0}`, label: 'Jobs done' },
+        { value: `${profile.ratingCount ?? 0}`, label: 'Reviews' },
       ]}
       groups={groups}
       onLogout={onLogout}

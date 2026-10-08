@@ -1,5 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
-import { Alert, Image, Pressable, StyleSheet, View } from 'react-native';
+import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Alert } from './AppAlert';
 import { colors } from '../constants/theme';
 import { CloseIcon, UploadBoxIcon } from './jobIcons';
 

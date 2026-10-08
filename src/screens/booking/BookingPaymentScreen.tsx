@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import BookingLayout from '../../components/BookingLayout';
 import FadeIn from '../../components/FadeIn';
@@ -12,15 +12,36 @@ import {
 } from '../../components/flowIcons';
 import PrimaryButton from '../../components/PrimaryButton';
 import { colors } from '../../constants/theme';
+import { createBooking, payBooking } from '../../api/customer';
+import { apiMessage } from '../../api/errors';
+import { scheduleToIso } from '../../api/mappers';
+import { ApiBooking, ApiCard, ApiTechnicianCard } from '../../api/types';
 import { BookingSummary } from '../../types/booking';
 import { formatBookingDate } from '../../utils/calendar';
 import BookingConfirmedModal from './BookingConfirmedModal';
 
 type Props = {
   summary: BookingSummary;
+  /** Server ids of what was chosen, needed to create the booking. */
+  vehicleId: number;
+  planId: number;
+  /** The technician the customer chose, or none to let us assign one. */
+  technician?: ApiTechnicianCard | null;
+  onChangeTechnician?: () => void;
+  /** The card that will be charged; the customer picks it on the Payment Methods screen. */
+  card?: ApiCard | null;
+  cardsLoading?: boolean;
   onBack?: () => void;
   onChangeVehicle?: () => void;
+  /** Opens the saved cards so another can be chosen, or one added. */
+  onChangeCard?: () => void;
   onHome?: () => void;
+  /** A booking made earlier in this checkout that still waits for payment (so a retry doesn't make a second one). */
+  pendingBooking?: ApiBooking | null;
+  /** Called as soon as the booking exists on the server, before it is paid. */
+  onCreated?: (booking: ApiBooking) => void;
+  /** Called once the booking exists and is paid, with the server's record of it. */
+  onBooked?: (booking: ApiBooking) => void;
   onViewBooking?: () => void;
 };
 
@@ -40,20 +61,58 @@ function Dot({ size }: { size: number }) {
 }
 
 // Booking step 5 of 5: review everything and pay.
-export default function BookingPaymentScreen({ summary, onBack, onChangeVehicle, onHome, onViewBooking }: Props) {
+export default function BookingPaymentScreen({
+  summary,
+  vehicleId,
+  planId,
+  card,
+  cardsLoading,
+  technician,
+  onChangeTechnician,
+  onBack,
+  onChangeVehicle,
+  onChangeCard,
+  onHome,
+  pendingBooking,
+  onCreated,
+  onBooked,
+  onViewBooking,
+}: Props) {
   const [paying, setPaying] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [error, setError] = useState('');
+  // If creating worked but paying failed, a retry must pay the same booking, not create another.
+  const created = useRef<ApiBooking | null>(pendingBooking ?? null);
 
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  // There's no payment provider connected yet, so paying only simulates a short delay.
-  const pay = () => {
+  const pay = async () => {
+    if (paying) return;
+    if (!card) {
+      setError('Add a payment method first.');
+      return;
+    }
     setPaying(true);
-    timer.current = setTimeout(() => {
-      setPaying(false);
+    setError('');
+    try {
+      if (!created.current) {
+        created.current = await createBooking({
+          vehicle: vehicleId,
+          plan: planId,
+          scheduled_at: scheduleToIso(summary.date, summary.time),
+          address: summary.address,
+          latitude: summary.latitude,
+          longitude: summary.longitude,
+          technician: technician?.id,
+        });
+        onCreated?.(created.current);
+      }
+      const paid = await payBooking(created.current.id, card.id);
+      onBooked?.(paid);
       setConfirmed(true);
-    }, 1400);
+    } catch (e) {
+      setError(apiMessage(e, 'Payment failed. Please try again.'));
+    } finally {
+      setPaying(false);
+    }
   };
 
   const { vehicle, price } = summary;
@@ -137,28 +196,67 @@ export default function BookingPaymentScreen({ summary, onBack, onChangeVehicle,
           </Card>
         </FadeIn>
 
+        <FadeIn delay={530} distance={28}>
+          <Card>
+            <View style={styles.methodHeader}>
+              <Text style={styles.cardTitle}>Technician</Text>
+              <Pressable hitSlop={10} onPress={onChangeTechnician}>
+                <Text style={styles.change}>{technician ? 'Change' : 'Choose'}</Text>
+              </Pressable>
+            </View>
+            {technician ? (
+              <View style={styles.techRow}>
+                {technician.photo ? (
+                  <Image source={{ uri: technician.photo }} style={styles.techPhoto} />
+                ) : (
+                  <View style={[styles.techPhoto, styles.techInitial]}>
+                    <Text style={styles.techInitialText}>{technician.full_name.charAt(0).toUpperCase()}</Text>
+                  </View>
+                )}
+                <View style={styles.methodInfo}>
+                  <Text style={styles.cardNumber} numberOfLines={1}>
+                    {technician.full_name}
+                  </Text>
+                  <Text style={styles.cardType} numberOfLines={1}>
+                    {technician.rating ? `${technician.rating.toFixed(1)} ★ · ` : ''}
+                    {technician.jobs_completed} jobs done
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <Text style={styles.cardType}>Any available technician. We’ll assign the best one who is free.</Text>
+            )}
+          </Card>
+        </FadeIn>
+
         <FadeIn delay={590} distance={28}>
           <Card>
             <View style={styles.methodHeader}>
               <Text style={styles.cardTitle}>Payment Method</Text>
-              <Pressable hitSlop={10}>
-                <Text style={styles.change}>Change</Text>
-              </Pressable>
+              {card && (
+                <Pressable hitSlop={10} onPress={onChangeCard}>
+                  <Text style={styles.change}>Change</Text>
+                </Pressable>
+              )}
             </View>
-            <View style={styles.methodRow}>
-              <View style={styles.methodLeft}>
-                <View style={styles.visaTile}>
-                  <VisaIcon />
+            {card ? (
+              <View style={styles.methodRow}>
+                <View style={styles.methodLeft}>
+                  <View style={styles.visaTile}>
+                    <VisaIcon />
+                  </View>
+                  <View style={styles.methodInfo}>
+                    <Text style={styles.cardNumber}>**** {card.last4}</Text>
+                    <Text style={styles.cardType}>{card.brand}</Text>
+                  </View>
                 </View>
-                <View style={styles.methodInfo}>
-                  <Text style={styles.cardNumber}>**** 4242</Text>
-                  <Text style={styles.cardType}>Credit card</Text>
-                </View>
+                <TickCircleIcon />
               </View>
-              <TickCircleIcon />
-            </View>
+            ) : (
+              <Text style={styles.cardType}>{cardsLoading ? 'Loading your cards…' : 'No payment method saved yet.'}</Text>
+            )}
             <View style={styles.divider} />
-            <Pressable style={styles.addMethod} hitSlop={8}>
+            <Pressable style={styles.addMethod} hitSlop={8} onPress={onChangeCard}>
               <AddLineIcon />
               <Text style={styles.addText}>Add Payment Method</Text>
             </Pressable>
@@ -167,6 +265,7 @@ export default function BookingPaymentScreen({ summary, onBack, onChangeVehicle,
       </ScrollView>
 
       <FadeIn delay={750} distance={40} style={styles.footer}>
+        {!!error && <Text style={styles.payError}>{error}</Text>}
         <PrimaryButton title={`Pay $${price.toFixed(2)}`} onPress={pay} loading={paying} />
       </FadeIn>
 
@@ -176,6 +275,11 @@ export default function BookingPaymentScreen({ summary, onBack, onChangeVehicle,
 }
 
 const styles = StyleSheet.create({
+  techRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 12 },
+  techPhoto: { width: 44, height: 44, borderRadius: 10 },
+  techInitial: { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.border },
+  techInitialText: { fontFamily: 'Poppins_600SemiBold', fontSize: 18, color: colors.text },
+  payError: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: colors.red, textAlign: 'center', marginBottom: 10 },
   scroll: { flex: 1, marginTop: 32 },
   content: { paddingHorizontal: 24, paddingBottom: 24, gap: 16 },
   heading: { gap: 4, marginBottom: 5 },

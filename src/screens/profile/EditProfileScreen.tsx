@@ -8,6 +8,9 @@ import SelectField from '../../components/SelectField';
 import TireBackground from '../../components/TireBackground';
 import { colors } from '../../constants/theme';
 import { UserProfile } from '../../types/profile';
+import { apiFieldErrors, apiMessage } from '../../api/errors';
+import { profileFromUser } from '../../api/mappers';
+import { ProfileChanges, updateMe } from '../../api/shared';
 import { chooseProfilePhoto } from '../../utils/pickImage';
 
 const SPECIALTIES = [
@@ -43,11 +46,13 @@ type Props = {
   onSave: (profile: UserProfile) => void;
 };
 
-// Change your photo and details. Nothing is stored until you press Save.
+// Change your photo and details. Nothing is sent to the server until you press Save.
 export default function EditProfileScreen({ profile, role, onBack, onSave }: Props) {
   const [form, setForm] = useState<UserProfile>(profile);
   const [submitted, setSubmitted] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [serverError, setServerError] = useState('');
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -65,19 +70,35 @@ export default function EditProfileScreen({ profile, role, onBack, onSave }: Pro
     if (uri) setForm((f) => ({ ...f, photo: uri }));
   };
 
-  const save = () => {
+  const save = async () => {
+    if (saving) return;
     setSubmitted(true);
+    setServerError('');
     if (!valid) return;
-    onSave({
-      ...form,
-      name: form.name.trim(),
-      email: form.email.trim(),
+    const changes: ProfileChanges = {
+      full_name: form.name.trim(),
       phone: form.phone.trim(),
       city: form.city.trim(),
       bio: form.bio.trim(),
-    });
-    setSaved(true);
-    timer.current = setTimeout(() => onBack?.(), 700);
+    };
+    if (role === 'technician') {
+      changes.specialty = form.specialty;
+      changes.experience = form.experience;
+    }
+    // A photo already on the server is an http link; a new one is a file on the phone.
+    if (form.photo && form.photo !== profile.photo) changes.photoUri = form.photo;
+    if (!form.photo && profile.photo) changes.remove_photo = true;
+    setSaving(true);
+    try {
+      onSave(profileFromUser(await updateMe(changes)));
+      setSaved(true);
+      timer.current = setTimeout(() => onBack?.(), 700);
+    } catch (e) {
+      const fields = apiFieldErrors(e);
+      setServerError(Object.values(fields)[0] ?? apiMessage(e, 'Could not save your changes. Please try again.'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -138,6 +159,8 @@ export default function EditProfileScreen({ profile, role, onBack, onSave }: Pro
                 autoCapitalize="none"
                 keyboardType="email-address"
                 textContentType="emailAddress"
+                // The email is the account's sign-in; the server doesn't let it be changed here.
+                editable={false}
                 error={emailError}
               />
             </Field>
@@ -210,7 +233,10 @@ export default function EditProfileScreen({ profile, role, onBack, onSave }: Pro
             <Text style={styles.savedText}>Saved ✓</Text>
           </View>
         ) : (
-          <PrimaryButton title="Save Changes" onPress={save} />
+          <>
+            {!!serverError && <Text style={styles.serverError}>{serverError}</Text>}
+            <PrimaryButton title="Save Changes" onPress={save} loading={saving} />
+          </>
         )}
       </FadeIn>
     </View>
@@ -221,6 +247,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, overflow: 'hidden' },
   flex: { flex: 1 },
   content: { paddingTop: 24, paddingHorizontal: 24, paddingBottom: 120, gap: 16 },
+  serverError: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: colors.red, textAlign: 'center', marginBottom: 12 },
   photoWrap: { alignItems: 'center', gap: 8 },
   photoButton: { width: 96, height: 96 },
   avatar: {

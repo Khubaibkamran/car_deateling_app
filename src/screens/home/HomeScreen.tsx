@@ -9,6 +9,7 @@ import BookingCard from './BookingCard';
 import PromoBanner, { BANNER_W } from './PromoBanner';
 import SectionHeader from './SectionHeader';
 import ServicesCatalog from './ServicesCatalog';
+import { ApiBooking } from '../../api/types';
 import { Vehicle } from '../../types/vehicle';
 import VehicleCard from './VehicleCard';
 
@@ -38,13 +39,19 @@ type Props = {
   onSelectVehicle?: (id: string) => void;
   onAddVehicle?: () => void;
   onBookService?: () => void;
+  /** The customer's next booking, if they have one. */
+  upcoming?: ApiBooking | null;
+  onOpenBooking?: (booking: ApiBooking) => void;
+  onViewAllBookings?: () => void;
+  /** Where the customer last booked, or their city. */
+  address?: string;
   onMenuPress?: () => void;
   onNotificationsPress?: () => void;
   /** Unread notifications shown on the bell. */
   notifications?: number;
 };
 
-export default function HomeScreen({ vehicles, selectedVehicleId, onSelectVehicle, onAddVehicle, onBookService, onMenuPress, onNotificationsPress, notifications }: Props) {
+export default function HomeScreen({ vehicles, selectedVehicleId, onSelectVehicle, onAddVehicle, onBookService, upcoming, onOpenBooking, onViewAllBookings, address, onMenuPress, onNotificationsPress, notifications }: Props) {
   const [localId, setLocalId] = useState<string | undefined>(vehicles[0]?.id);
   const selectedId = selectedVehicleId ?? localId;
   const setSelectedId = (id: string) => (onSelectVehicle ? onSelectVehicle(id) : setLocalId(id));
@@ -64,11 +71,11 @@ export default function HomeScreen({ vehicles, selectedVehicleId, onSelectVehicl
           <View style={styles.location}>
             <PinIcon size={20} />
             <Text style={styles.locationText} numberOfLines={1}>
-              1287 N Alpine Drive, Beverly Hills, CA 90210
+              {address || 'Choose your location when you book'}
             </Text>
           </View>
-          <Pressable hitSlop={10}>
-            <Text style={styles.change}>Change</Text>
+          <Pressable hitSlop={10} onPress={onBookService}>
+            <Text style={styles.change}>{address ? 'Book' : 'Book now'}</Text>
           </Pressable>
         </FadeIn>
 
@@ -88,8 +95,12 @@ export default function HomeScreen({ vehicles, selectedVehicleId, onSelectVehicl
 
         <View style={styles.sections}>
           <FadeIn delay={440} style={styles.section}>
-            <SectionHeader title="Upcoming Booking" actionLabel="View All" />
-            <BookingCard />
+            <SectionHeader title="Upcoming Booking" actionLabel="View All" onActionPress={onViewAllBookings} />
+            {upcoming ? (
+              <BookingCard booking={upcoming} onPress={() => onOpenBooking?.(upcoming)} />
+            ) : (
+              <Text style={styles.empty}>No upcoming bookings. Book a service to get started.</Text>
+            )}
           </FadeIn>
 
           <FadeIn delay={560} style={styles.section}>
@@ -139,4 +150,5 @@ const styles = StyleSheet.create({
   addVehicle: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   addVehicleText: { fontFamily: 'Poppins_500Medium', fontSize: 12, color: colors.primary },
   vehicles: { gap: 12 },
+  empty: { fontFamily: 'Poppins_400Regular', fontSize: 13, color: colors.textSecondary },
 });
